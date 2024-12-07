@@ -1,4 +1,6 @@
 const sha256 = require("js-sha256");
+const ecLib = require("elliptic").ec;
+const ec = new ecLib("secp256k1");
 
 class Transaction {
   constructor(fromAddress, toAddress, amount) {
@@ -6,13 +8,30 @@ class Transaction {
     this.toAddress = toAddress;
     this.amount = amount;
   }
+
+  calculateHash() {
+    return sha256(this.fromAddress + this.toAddress + this.amount);
+  }
+
+  sign(key) {
+    this.signature = key.sign(this.calculateHash(), "base64").toDER("hex");
+  }
+
+  isValid() {
+    if(this.fromAddress === null)
+      return true
+    if(!this.signature)
+      throw new Error('sign missing')
+    const publicKey = ec.keyFromPublic(this.fromAddress, 'hex')
+    return publicKey.verify(this.calculateHash(), this.signature)
+  }
 }
 
 class Block {
-  constructor(index, timestamp, data, previousHash = "") {
+  constructor(index, timestamp, transactions, previousHash = "") {
     this.index = index;
     this.timestamp = timestamp;
-    this.data = data;
+    this.transactions = transactions;
     this.previousHash = previousHash;
     this.nonce = 0;
     this.hash = this.calculateHash();
@@ -20,7 +39,11 @@ class Block {
 
   calculateHash() {
     return sha256(
-      this.index + this.timestamp + this.data + this.nonce + this.previousHash
+      this.index +
+        this.timestamp +
+        JSON.stringify(this.transactions) +
+        this.nonce +
+        this.previousHash
     );
   }
 
@@ -45,6 +68,16 @@ class Block {
       }
     }
     console.log(`Block mined(挖矿结束): ${this.hash}`);
+  }
+
+  validateTransactions(){
+    for(let transaction of this.transactions){
+      if(!transaction.isValid()){
+        console.log('非法交易')
+        return false
+      }
+    }
+    return true
   }
 }
 
@@ -83,12 +116,6 @@ class Blockchain {
     );
     this.transactionPool.push(transaction);
     // this.index + this.timestamp + this.data + this.nonce + this.previousHash
-    const block = new Block(
-      this.getLatestBlock().index + 1,
-      Date.now(),
-      this.transactionPool,
-      this.getLatestBlock().hash
-    );
 
     const newBlock = new Block(
       this.transactionPool,
@@ -102,15 +129,26 @@ class Blockchain {
   }
 
   isValidChain() {
+    if (this.chain.length === 1) {
+      if (this.chain[0].hash !== this.chain[0].calculateHash()) {
+        return false;
+      }
+      return true;
+    }
+
     for (let i = 1; i < this.chain.length; i++) {
       const currentBlock = this.chain[i];
-      const previousBlock = this.chain[i - 1];
+      
 
+      if (!currentBlock.validateTransactions()) {
+        console.log("区块数据校验失败，交易数据可能被篡改");
+        return false;
+        }
       if (currentBlock.hash !== currentBlock.calculateHash()) {
         console.log("数据校验失败，区块哈希不匹配，数据可能被篡改");
         return false;
       }
-
+      const previousBlock = this.chain[i - 1];
       if (currentBlock.previousHash !== previousBlock.hash) {
         console.log("前后区块链断裂");
         return false;
@@ -122,18 +160,34 @@ class Blockchain {
 }
 
 const blockchain = new Blockchain();
-blockchain.addBlock(new Block(1, Date.now(), "Block 1"));
-blockchain.addBlock(new Block(2, Date.now(), "Block 2"));
+const keyPairSender = ec.genKeyPair();
+const privatekeyPairSender = keyPairSender.getPrivate('hex');
+const publickeyPairSender = keyPairSender.getPublic('hex');
+const keyPairReceiver = ec.genKeyPair();
+const privatekeyPairReceiver = keyPairReceiver.getPrivate('hex');
+const publickeyPairReceiver = keyPairReceiver.getPublic('hex');
 
-const block1 = new Transaction("Alice", "Bob", 50);
-const block2 = new Transaction("Bob", "Charlie", 20);
-blockchain.addTransaction(block1);
-blockchain.addTransaction(block2);
+const transaction1 = new Transaction(
+  publickeyPairSender,
+  publickeyPairReceiver,
+  10
+  );
+  transaction1.sign(keyPairSender);
+console.log(transaction1);
+console.log(transaction1.isValid());
 
-// console.log(blockchain.isValidChain());
+// blockchain.addBlock(new Block(1, Date.now(), "Block 1"));
+// blockchain.addBlock(new Block(2, Date.now(), "Block 2"));
+
+// const block1 = new Transaction("Alice", "Bob", 10);
+// const block2 = new Transaction("Bob", "Charlie", 5);
+// blockchain.addTransaction(block1);
+// blockchain.addTransaction(block2);
+
 // console.log(blockchain.chain);
+// console.log(blockchain.isValidChain());
 
-blockchain.mineTransactionPool("Miner");
-console.log(blockchain);
-console.log(blockchain.chain[1]);
-console.log(blockchain.chain[1].data);
+// blockchain.mineTransactionPool("Miner");
+// console.log(blockchain);
+// console.log(blockchain.chain[1]);
+// console.log(blockchain.chain[1].data);
